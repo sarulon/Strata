@@ -1,0 +1,590 @@
+diff --git a/docs/AI_SETUP.md b/docs/AI_SETUP.md
+index 48fd142..1398bfd 100644
+--- a/docs/AI_SETUP.md
++++ b/docs/AI_SETUP.md
+@@ -48,7 +48,10 @@ Requirements (details: [INSTALL.md](INSTALL.md#what-you-need)):
+ - **Driver:** NVIDIA 580 or newer. AMD on Linux: the kernel's amdgpu driver; on Windows: a current AMD Adrenalin
+   driver. If the driver is missing or too old, tell the user to update it (NVIDIA App / nvidia.com/drivers, or AMD
+   Software) and restart; do not install drivers yourself unless they ask.
+-- **RAM:** 32 GB or more (see step 3). **Disk:** ~80 GB free, ideally on an NVMe SSD. **CPU:** x86-64 with AVX2.
++- **RAM:** 32 GB or more (see step 3). **Disk:** ~80 GB free, ideally on an NVMe SSD. **CPU:** 64-bit x86; AVX2 with
++  FMA and F16C (Intel Haswell 2013, AMD Zen 2017, or newer) picks the fast expert kernels and AVX-512 more; a CPU
++  without AVX2 still runs a native (GGUF-quant) model on the portable ggml-cpu kernels, several-fold slower at
++  decoding, while the canonical Q2_0 model needs AVX-512 for its CPU experts.
+ - **OS:** Windows 10/11 or Linux (Ubuntu 22.04/24.04 are fully automatic).
+ 
+ If the PC does not meet them, say which part is missing and stop.
+diff --git a/docs/DETAILS.md b/docs/DETAILS.md
+index e30c295..6ee8aba 100644
+--- a/docs/DETAILS.md
++++ b/docs/DETAILS.md
+@@ -276,7 +276,7 @@ Everything else is installed for you the first time.
+ | --- | --- |
+ | GPU | NVIDIA **RTX 20, 30, 40 or 50 series**, **12 GB VRAM or more** (8 GB runs, slowly). Measured on an RTX 5070 and an RTX 3090; RTX 20 (Turing, since 0.1.27) was tested by a contributor on an RTX 2070. Or AMD **Radeon RX 7900 XT / XTX, RX 7800 XT / 7700 XT, RX 9060 XT, RX 9070 / 9070 XT, Radeon AI PRO R9700, RX 6800 / 6900 series**: [AMD_HIP.md](AMD_HIP.md). |
+ | RAM | **64 GB** recommended (see the table above). |
+-| CPU | x86-64 with AVX2 (any Intel/AMD desktop CPU from the last ~8 years). AVX-512 (Ryzen 7000/9000) is a bit faster. |
++| CPU | 64-bit x86. **AVX2** with FMA and F16C (Intel Haswell, 2013; AMD Zen, 2017; any Intel/AMD desktop CPU since) selects Strata's fast expert kernels; **AVX-512** with VNNI and VBMI (Intel Skylake-X/server, AMD Ryzen 7000/9000) is faster again. A CPU **without AVX2** still runs a native (GGUF-quant) model through the portable ggml-cpu kernels, correctly but several-fold slower at decoding; the canonical Q2_0 model needs AVX-512 for its CPU experts. |
+ | Disk | ~70-80 GB free for the model, ~6 GB for the MTP layer (+1 GB with images). **Q2_0 on an AVX-512 CPU** also writes a one-time ~40 GB copy of its experts for the fast CPU kernel. An NVMe SSD is strongly recommended. |
+ | OS | Windows 10/11, or Linux (Ubuntu 22.04/24.04 get everything installed automatically). |
+ 
+diff --git a/docs/INSTALL.md b/docs/INSTALL.md
+index 051f7be..dff90bc 100644
+--- a/docs/INSTALL.md
++++ b/docs/INSTALL.md
+@@ -15,7 +15,7 @@ this for you with [AI_SETUP.md](AI_SETUP.md).
+ | --- | --- |
+ | **GPU** | **NVIDIA** RTX 20, 30, 40 or 50 series, **12 GB VRAM or more** (8 GB runs, slowly). Measured on an RTX 5070 and an RTX 3090; RTX 20 (Turing, since 0.1.27) was tested by a contributor on an RTX 2070. **AMD** Radeon RX 7900 XT / XTX, RX 9070 / 9070 XT and Radeon AI PRO R9700 (validated), RX 7800 XT / 7700 XT and RX 9060 XT (validated by their owners), RX 6800 / 6900 series (community-reported), with 12 GB of VRAM or more. See [AMD cards](#amd-cards). |
+ | **RAM** | Enough for the size you pick ([which model](MODELS.md#pick-by-ram)); **64 GB** runs every size. A big GPU makes up for less RAM - the [low-RAM mode](MODELS.md#a-big-graphics-card-and-little-ram). |
+-| **CPU** | x86-64 with AVX2 (any Intel/AMD desktop CPU from the last ~8 years). AVX-512 (Ryzen 7000/9000) is a bit faster. |
++| **CPU** | 64-bit x86. **AVX2** with FMA and F16C (Intel Haswell, 2013; AMD Zen, 2017; any Intel/AMD desktop CPU since) selects Strata's fast expert kernels; **AVX-512** with VNNI and VBMI (Intel Skylake-X/server, AMD Ryzen 7000/9000) is faster again. A CPU **without AVX2** still runs a native (GGUF-quant) model through the portable ggml-cpu kernels, correctly but several-fold slower at decoding; the canonical Q2_0 model needs AVX-512 for its CPU experts. |
+ | **Disk** | ~70-80 GB free for the model, ~6 GB for the MTP layer (+1 GB with images). **Q2_0 on an AVX-512 CPU** also writes a one-time ~40 GB copy of its experts for the fast CPU kernel. On Linux with an AMD card, ROCm takes ~10 GB more when setup installs it. An NVMe SSD is strongly recommended: it makes the first start much faster. |
+ | **OS** | Windows 10/11, or Linux (Ubuntu 22.04/24.04 get everything installed automatically). |
+ | **Driver** | **NVIDIA:** a current driver, version 580 or newer ([nvidia.com/drivers](https://www.nvidia.com/drivers) or the NVIDIA App). **AMD:** on Linux the kernel's amdgpu driver (no ROCm install needed); on Windows a current AMD Software: Adrenalin Edition driver ([amd.com/support](https://www.amd.com/en/support)). |
+diff --git a/setup.py b/setup.py
+index 98bc56a..12f0cee 100644
+--- a/setup.py
++++ b/setup.py
+@@ -3080,7 +3080,8 @@ def main() -> int:
+              "Advanced system settings > Performance > Advanced > Virtual memory")
+     ok(f"CPU: {cpu} ({'AVX-512' if avx512 else 'AVX2' if avx2 else 'no AVX2'})")
+     if not avx2:
+-        fail("this CPU has no AVX2; Strata needs at least AVX2")
++        warn("this CPU has no AVX2: the experts run on Strata's portable ggml kernels and decoding will be "
++             "several-fold slower; native (GGUF-quant) models still run, the canonical Q2_0 pack needs AVX-512")
+     if a.check:
+         say()
+         for m, d in MODELS.items():
+diff --git a/src/core/expert_source.cpp b/src/core/expert_source.cpp
+index 087854e..2f6949f 100644
+--- a/src/core/expert_source.cpp
++++ b/src/core/expert_source.cpp
+@@ -859,6 +859,8 @@ RouterLookahead::~RouterLookahead() {
+ bool RouterLookahead::start(std::vector<std::vector<uint16_t>> routers, int64_t n_embd, int64_t n_expert, int k,
+                             ExpertSource* src, std::string& err) {
+     if (src == nullptr || !src->warms()) { err = "RouterLookahead: the expert source does not warm"; return false; }
++    // The router dot is an AVX2 kernel; without AVX2 the lookahead is simply left off (it only prefetches).
++    if (!strata::kernels::cpu::cpu_avx2_ok()) { err = "RouterLookahead: the bf16 router dot needs AVX2"; return false; }
+     if (n_embd % 8 != 0) { err = "RouterLookahead: n_embd is not a multiple of 8"; return false; }
+     for (const auto& r : routers)
+         if (r.size() != (size_t) (n_embd * n_expert)) { err = "RouterLookahead: a router of another shape"; return false; }
+@@ -1510,7 +1512,7 @@ void expert_pool_dispatch(void* user, const float* x_f, const int32_t* ids, cons
+ 
+     // Clause 1: rebuilt from `x_f` on EVERY call.  `x_f` is mapped pinned memory whose address never changes,
+     // so anything cached against it would be layer 0's activation reused 48 times.
+-    act_quant_q8_1(x_f, H, d.act);
++    act_quant_any(x_f, H, d.act);
+ 
+     // ---- R4.2c: THE POOL'S HALF OF THE SPLIT.  **IT DOES NOT DECIDE ANYTHING - `Launch` ALREADY DID.**
+     //
+@@ -1752,7 +1754,7 @@ void expert_pool_dispatch_multi(ExpertDispatch& d, const float* x_f, const int32
+         for (int64_t t = 0; t < n_tok; ++t)
+             native_quant_act(lay.fmt[(size_t) d.layers], x_f + (size_t) t * H, d.nact_multi.data() + (size_t) t * kNativeActBytes);
+     else
+-        for (int64_t t = 0; t < n_tok; ++t) act_quant_q8_1(x_f + (size_t) t * H, H, d.act_multi[(size_t) t]);
++        for (int64_t t = 0; t < n_tok; ++t) act_quant_any(x_f + (size_t) t * H, H, d.act_multi[(size_t) t]);
+     const auto c2 = std::chrono::steady_clock::now();
+     {   // CS-T: the experts the CPU computes, fetched together (the GGUF in place reads them on several threads)
+         static thread_local std::vector<int64_t> miss;
+diff --git a/src/kernels/cpu/expert.cpp b/src/kernels/cpu/expert.cpp
+index 045e3d5..f3617d8 100644
+--- a/src/kernels/cpu/expert.cpp
++++ b/src/kernels/cpu/expert.cpp
+@@ -21,8 +21,6 @@
+ namespace strata::kernels::cpu {
+ namespace {
+ 
+-std::atomic<bool> oracle_q8_0{false};
+-
+ /// fp16 -> fp32, written out rather than using `_cvtsh_ss`, because the F16C intrinsic's behaviour on
+ /// subnormals is the one place the two can differ and the scales in this artifact are small.
+ inline float h2f(const uint8_t* p) {
+@@ -150,7 +148,9 @@ inline float hsum_ps(__m256 v) {
+ // products built for eight blocks at a time; the weight-independent correction is one FMA per eight blocks.
+ // The sum order differs from the 256-bit kernel (last-bit differences); the verify window and plain decode both
+ // use this kernel, so speculative decode still reproduces plain decode exactly.
+-static const bool kZmm = std::getenv("STRATA_CPU_YMM") == nullptr;
++// Read once, lazily, from inside a kernel: this TU is compiled with -mavx512..., so a namespace-scope initializer
++// would run as a pre-main constructor and could be emitted with AVX-512 instructions that fault before main.
++inline bool cpu_zmm() { static const bool v = std::getenv("STRATA_CPU_YMM") == nullptr; return v; }
+ 
+ inline __m512i unpack64_q2_0(const uint8_t* codes) {
+     const __m128i packed = _mm_loadu_si128((const __m128i*) codes);          // 8 u16 = 64 codes
+@@ -230,7 +230,7 @@ inline void row_dot_multi_z(const uint8_t* codes, const uint8_t* scales, const A
+ /// 64-weight block (two 8-lane horizontal sums: a store plus 16 scalar adds) cost far more than the dot
+ /// products themselves - it made the kernel compute-bound at 21 GB/s instead of DRAM-bound at 32.
+ inline float row_dot(const uint8_t* codes, const uint8_t* scales, const ActQ& a, int nblocks) {
+-    if (kZmm) return row_dot_z(codes, scales, a, nblocks);
++    if (cpu_zmm()) return row_dot_z(codes, scales, a, nblocks);
+     __m256 acc = _mm256_setzero_ps();
+     // The -sum(xhat) term is a SCALAR: broadcasting it into all 8 lanes and letting hsum_ps add them would
+     // apply it eight times per block.
+@@ -277,7 +277,7 @@ inline float row_dot_oracle(const uint8_t* codes, const uint8_t* scales, const A
+ template<int NT>
+ inline void row_dot_multi(const uint8_t* codes, const uint8_t* scales, const ActQ* const* a, int nblocks,
+                           float* res) {
+-    if (kZmm) { row_dot_multi_z<NT>(codes, scales, a, nblocks, res); return; }
++    if (cpu_zmm()) { row_dot_multi_z<NT>(codes, scales, a, nblocks, res); return; }
+     __m256 acc[NT];
+     float corr[NT];
+     for (int t = 0; t < NT; ++t) { acc[t] = _mm256_setzero_ps(); corr[t] = 0.f; }
+@@ -384,7 +384,7 @@ void cpu_require_expert_support() {
+ }
+ 
+ void act_quant_q8_1(const float* x, int n, ActQ& a) {
+-    if (oracle_q8_0.load(std::memory_order_relaxed)) {
++    if (expert_oracle_q8_0_enabled()) {
+         quantize_oracle_q8_0(x, n, a);
+         return;
+     }
+@@ -450,17 +450,13 @@ void act_quant_q8_1(const float* x, int n, ActQ& a) {
+     }
+ }
+ 
+-void expert_set_oracle_q8_0(bool enabled) {
+-    oracle_q8_0.store(enabled, std::memory_order_relaxed);
+-}
+-
+ void s2_expert_vnni(const uint8_t* blob, const float* x, float* out, ExpertScratch& ws) {
+     act_quant_q8_1(x, H, ws.a1);
+     s2_expert_vnni_q(blob, ws.a1, out, ws);
+ }
+ 
+ void s2_expert_vnni_q(const uint8_t* blob, const ActQ& a1, float* out, ExpertScratch& ws) {
+-    if (oracle_q8_0.load(std::memory_order_relaxed)) {
++    if (expert_oracle_q8_0_enabled()) {
+         expert_oracle_q8_0(blob, a1, out, ws);
+         return;
+     }
+@@ -479,8 +475,6 @@ void s2_expert_vnni_q(const uint8_t* blob, const ActQ& a1, float* out, ExpertScr
+                          blob + O_D_SCALES + (size_t) r * SC_D * 2, ws.a2, SC_D);
+ }
+ 
+-bool expert_oracle_q8_0_enabled() { return oracle_q8_0.load(std::memory_order_relaxed); }
+-
+ void s2_expert_gu_rows(const uint8_t* blob, const ActQ& a1, float* ff, int r0, int r1) {
+     for (int r = r0; r < r1; ++r) {
+         const float g = row_dot(blob + O_GU_CODES + (size_t) (2 * r) * ROW_GU,
+@@ -610,7 +604,7 @@ void q2_0_gguf_rows_multi(const uint8_t* w, size_t row_bytes, int nblocks, const
+ 
+ void s2_expert_vnni_multi(const uint8_t* blob, const ActQ* const* a1, int n_tokens, float* const* out,
+                           ExpertScratchMulti& ws) {
+-    if (oracle_q8_0.load(std::memory_order_relaxed) || n_tokens < 1 || n_tokens > MAXT) {
++    if (expert_oracle_q8_0_enabled() || n_tokens < 1 || n_tokens > MAXT) {
+         for (int t = 0; t < n_tokens; ++t) s2_expert_vnni_q(blob, *a1[t], out[t], ws.single);
+         return;
+     }
+diff --git a/src/kernels/cpu/expert_layout.cpp b/src/kernels/cpu/expert_layout.cpp
+index 4583b10..c937ed8 100644
+--- a/src/kernels/cpu/expert_layout.cpp
++++ b/src/kernels/cpu/expert_layout.cpp
+@@ -1,10 +1,12 @@
+ // src/kernels/cpu/expert_layout.cpp - plan v0.3 P6: the per-layer expert table.  See the header.
+ #include "strata/kernels/cpu/expert_layout.hpp"
+ 
++#include <cmath>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+ #include <string>
++#include <atomic>
+ #if defined(_MSC_VER)
+ #include <intrin.h>
+ #include <immintrin.h>
+@@ -16,10 +18,103 @@
+ 
+ namespace strata::kernels::cpu {
+ namespace {
+-ExpertLayout g_layout;
++// Held as a function-local static, not a namespace-scope object: ExpertLayout owns a std::vector, and a
++// namespace-scope instance would run its constructor before main (a _GLOBAL__sub_I).  Built lazily here, its
++// allocator runs only when the layout is first read or written, from normal startup code.
++ExpertLayout& layout_mut() { static ExpertLayout g; return g; }
++
++// The oracle-contract switch lives in this flag-free TU (not in expert.cpp, whose AVX-512 code must never run on
++// a CPU without it), so setting or reading it from startup is safe everywhere.  expert.cpp reads it through
++// expert_oracle_q8_0_enabled(); it only changes what the Q2_0 pack's AVX-512 kernels compute.
++std::atomic<bool> oracle_q8_0{false};
++
++/// fp16 -> fp32 by integer arithmetic (no F16C): the same decode expert.cpp and q2_avx2.cpp do, so a portable
++/// fallback produces the same scale value.
++inline float w2f(const uint8_t* p) {
++    uint16_t h;
++    std::memcpy(&h, p, 2);
++    const uint32_t sign = (uint32_t) (h >> 15) & 1u;
++    uint32_t exp = (h >> 10) & 0x1Fu, man = h & 0x3FFu, f;
++    if (exp == 0) {
++        if (man == 0) {
++            f = sign << 31;
++        } else {
++            exp = 127 - 15 + 1;
++            while (!(man & 0x400u)) { man <<= 1; --exp; }
++            man &= 0x3FFu;
++            f = (sign << 31) | (exp << 23) | (man << 13);
++        }
++    } else if (exp == 31) {
++        f = (sign << 31) | 0x7F800000u | (man << 13);
++    } else {
++        f = (sign << 31) | ((exp - 15 + 127) << 23) | (man << 13);
++    }
++    float out;
++    std::memcpy(&out, &f, 4);
++    return out;
++}
++
++/// The activation quantizer the AVX-512 and AVX-2 paths are the bit-for-bit scalar rule of: `QKA` values per
++/// chunk, an fp32 scale `amax / 127`, round half AWAY from zero by truncation, clamped to +-127, `hx = scale *
++/// sum`.  Portable, for a CPU without AVX2.
++void act_quant_scalar(const float* x, int n, ActQ& a) {
++    a.nchunks = n / QKA;
++    for (int k = 0; k < a.nchunks; ++k) {
++        const float* xb = x + k * QKA;
++        float amax = 0.f;
++        for (int j = 0; j < QKA; ++j) amax = std::fmax(amax, std::fabs(xb[j]));
++        const float s = amax > 0.f ? amax / 127.f : 0.f;
++        const float inv = s > 0.f ? 1.f / s : 0.f;
++        int32_t sum = 0;
++        int8_t* q = a.q + k * QKA;
++        for (int j = 0; j < QKA; ++j) {
++            const float t = xb[j] * inv;
++            const float r = t + (t >= 0.f ? 0.5f : -0.5f);
++            int v = (int) r;
++            v = v < -127 ? -127 : (v > 127 ? 127 : v);
++            q[j] = (int8_t) v;
++            sum += v;
++        }
++        a.scale[k] = s;
++        a.sum[k] = sum;
++        a.hx[k] = s * (float) sum;
++    }
++}
++
++/// One Q2_0 GGUF-layout row against `nt` activations, scalar.  Same identity the AVX kernels use: code `c` (0..3)
++/// against int8 `q`, minus the code-offset correction `hx`, per 32-value chunk and 64-weight block.
++void q2_rows_scalar(const uint8_t* w, size_t row_bytes, int nblocks, const ActQ* const* a, int nt,
++                    float* const* out, int r0, int r1) {
++    for (int r = r0; r < r1; ++r) {
++        const uint8_t* row = w + (size_t) r * row_bytes;
++        for (int t = 0; t < nt; ++t) {
++            const ActQ* act = a[t];
++            float acc = 0.f, corr = 0.f;
++            for (int b = 0; b < nblocks; ++b) {
++                const uint8_t* blk = row + (size_t) b * 18;
++                const float d = w2f(blk);
++                const uint8_t* codes = blk + 2;
++                const int8_t* q = act->q + b * QK;
++                for (int half = 0; half < 2; ++half) {
++                    int dot = 0;
++                    for (int j = 0; j < QKA; ++j)
++                        dot += ((codes[half * (QKA / 4) + (j >> 2)] >> (2 * (j & 3))) & 3) * (int) q[half * QKA + j];
++                    acc += d * act->scale[2 * b + half] * (float) dot;
++                }
++                corr += d * (act->hx[2 * b] + act->hx[2 * b + 1]);
++            }
++            out[t][r] = acc - corr;
++        }
++    }
++}
++}  // namespace
++
++void expert_set_oracle_q8_0(bool enabled) {
++    oracle_q8_0.store(enabled, std::memory_order_relaxed);
+ }
++bool expert_oracle_q8_0_enabled() { return oracle_q8_0.load(std::memory_order_relaxed); }
+ 
+-const ExpertLayout& expert_layout() { return g_layout; }
++const ExpertLayout& expert_layout() { return layout_mut(); }
+ 
+ bool cpu_avx512_ok() {
+     static const bool ok = [] {
+@@ -111,12 +206,14 @@ std::string cpu_name() {
+ void q2_rows_any(const uint8_t* w, size_t row_bytes, int nblocks, const ActQ* const* a, int nt, float* const* out,
+                  int r0, int r1) {
+     if (cpu_avx512_ok()) q2_0_gguf_rows_multi(w, row_bytes, nblocks, a, nt, out, r0, r1);
+-    else q2_0_gguf_rows_multi_avx2(w, row_bytes, nblocks, a, nt, out, r0, r1);
++    else if (cpu_avx2_ok()) q2_0_gguf_rows_multi_avx2(w, row_bytes, nblocks, a, nt, out, r0, r1);
++    else q2_rows_scalar(w, row_bytes, nblocks, a, nt, out, r0, r1);   // a CPU without AVX2: portable, this TU
+ }
+ 
+ void act_quant_any(const float* x, int n, ActQ& a) {
+     if (cpu_avx512_ok()) act_quant_q8_1(x, n, a);
+-    else act_quant_q8_1_avx2(x, n, a);
++    else if (cpu_avx2_ok()) act_quant_q8_1_avx2(x, n, a);
++    else act_quant_scalar(x, n, a);   // a CPU without AVX2: portable, this TU
+ }
+ 
+ #if !defined(STRATA_NATIVE_EXPERTS)
+@@ -136,7 +233,7 @@ bool expert_layout_load(const std::string& pack_dir, int64_t n_layers, int64_t n
+     std::ifstream in(pack_dir + "/native_experts.txt");
+     if (!in) {
+         L.total = (uint64_t) n_layers * (uint64_t) n_expert * (uint64_t) BLOB;
+-        g_layout = L;
++        layout_mut() = L;
+         return true;
+     }
+ #if !defined(STRATA_NATIVE_EXPERTS)
+@@ -232,7 +329,7 @@ bool expert_layout_load(const std::string& pack_dir, int64_t n_layers, int64_t n
+         at += L.bytes[(size_t) l] * (uint64_t) L.n_expert;
+     }
+     L.total = at;
+-    g_layout = L;
++    layout_mut() = L;
+     return true;
+ #endif
+ }
+diff --git a/src/kernels/cpu/iq_avx2.cpp b/src/kernels/cpu/iq_avx2.cpp
+index 790d9dc..9e6abf0 100644
+--- a/src/kernels/cpu/iq_avx2.cpp
++++ b/src/kernels/cpu/iq_avx2.cpp
+@@ -56,10 +56,12 @@ inline __m256i sc32(int s) { return _mm256_set1_epi16(s); }
+ // keven_signs_q2xs (ggml keeps it static in arch/x86/quants.c): one u64 per 7-bit sign index, byte k
+ // = 0xFF when bit k of ksigns_iq2xs[i] is set, 0x01 otherwise.  With this a whole 32-value sign vector
+ // is four scalar loads and a set_epi64x - no ksigns byte packing chain and no bit_selector expansion.
+-// Built once at load time from the shared ggml-common table so it can never drift from it.
++// Computed at COMPILE time (constexpr) from the shared ggml-common table so it can never drift from it, and so it
++// lands in .rodata with no loader-time constructor - this TU is compiled with -mavx2, and a runtime ctor would get
++// its init loop vectorized into ymm instructions that fault before main on a CPU without AVX2.
+ struct EvenSigns {
+     uint64_t v[128];
+-    EvenSigns() {
++    constexpr EvenSigns() : v{} {
+         for (int i = 0; i < 128; ++i) {
+             uint64_t r = 0;
+             for (int k = 0; k < 8; ++k)
+@@ -68,7 +70,7 @@ struct EvenSigns {
+         }
+     }
+ };
+-static const EvenSigns even_signs;
++static constexpr EvenSigns even_signs{};
+ 
+ inline float hsum8(__m256 v) {
+     const __m128 lo = _mm256_castps256_ps128(v), hi = _mm256_extractf128_ps(v, 1);
+@@ -84,13 +86,15 @@ inline float hsum8(__m256 v) {
+ // distance in bytes, 0 = off, default 2048.  Measured on a Zen 3 5700X3D (no AVX-512) on IQ3_S decode: -4% on
+ // the gate/up phase, +1.0 GB/s over the rows, -1.3% ms/round end to end.  The non-temporal hint measured
+ // worse than T0 at the same distance, so this keeps T0.
+-const int prefetch_ahead = [] {
+-    const char* v = std::getenv("STRATA_IQ_PREFETCH");
+-    return v ? std::atoi(v) : 2048;
+-}();
+-
+-inline void rows_ahead(const uint8_t* p) {
++inline void rows_ahead(const uint8_t* blk) {
++    // Read once, lazily, from inside a kernel (this TU is compiled with -mavx2, so a namespace-scope initializer
++    // would run as a pre-main constructor and be emitted with ymm instructions).  Prefetch `p` and `p+64`.
++    static const int prefetch_ahead = [] {
++        const char* v = std::getenv("STRATA_IQ_PREFETCH");
++        return v ? std::atoi(v) : 2048;
++    }();
+     if (prefetch_ahead <= 0) return;
++    const uint8_t* p = blk + prefetch_ahead;
+     _mm_prefetch((const char*) p, _MM_HINT_T0);
+     _mm_prefetch((const char*) p + 64, _MM_HINT_T0);
+ }
+@@ -183,7 +187,7 @@ inline void row_dot(const uint8_t* row, int nblocks, const block_q8_K* const* y,
+     for (int t = 0; t < NT; ++t) accf[t] = _mm256_setzero_ps();
+     for (int i = 0; i < nblocks; ++i) {
+         const uint8_t* blk = row + (size_t) i * Fmt32<TY>::bytes;
+-        rows_ahead(blk + prefetch_ahead);
++        rows_ahead(blk);
+         __m256i acci[NT];
+         for (int t = 0; t < NT; ++t) acci[t] = _mm256_setzero_si256();
+         for (int j = 0; j < 4; ++j) {
+@@ -248,7 +252,7 @@ inline void row_dot_iq2xs(const uint8_t* row, int nblocks, const block_q8_K* con
+     for (int t = 0; t < NT; ++t) accf[t] = _mm256_setzero_ps();
+     for (int i = 0; i < nblocks; ++i) {
+         const uint8_t* blk = row + (size_t) i * 74;
+-        rows_ahead(blk + prefetch_ahead);
++        rows_ahead(blk);
+         // the 8 scale bytes -> 16 half-scales of 2*s+1, interleaved [a0, b0, a1, b1, ...] (ggml's unpack)
+         __m128i st = _mm_set1_epi64x((long long) u64(blk + 66));
+         st = _mm_unpacklo_epi8(_mm_and_si128(st, m4), _mm_and_si128(_mm_srli_epi16(st, 4), m4));
+@@ -402,7 +406,7 @@ void iq4nl_rows(const uint8_t* w, size_t row_bytes, int n, const block_q8_0* con
+         for (int t = 0; t < NT; ++t) accf[t] = _mm256_setzero_ps();
+         for (int ib = 0; ib < nb; ++ib) {
+             const uint8_t* blk = row + (size_t) ib * sizeof(block_iq4_nl);
+-            rows_ahead(blk + prefetch_ahead);
++            rows_ahead(blk);
+             const __m128i bits = _mm_loadu_si128((const __m128i*) (blk + 2));
+             const __m128i lo = _mm_and_si128(bits, m4b);                      // values 0..15
+             const __m128i hi = _mm_and_si128(_mm_srli_epi16(bits, 4), m4b);    // values 16..31
+diff --git a/src/kernels/cpu/iq_avx512.cpp b/src/kernels/cpu/iq_avx512.cpp
+index 26d2c5a..ef7670d 100644
+--- a/src/kernels/cpu/iq_avx512.cpp
++++ b/src/kernels/cpu/iq_avx512.cpp
+@@ -30,13 +30,17 @@ inline uint64_t u64(const uint8_t* p) { uint64_t v; std::memcpy(&v, p, 8); retur
+ 
+ // E-2: the IQ3 grids by one AVX-512 gather (the same words, the same results) - measured 3-5% SLOWER than the scalar
+ // lookups on a Ryzen 5 7600 (Zen 4 gathers are microcoded), so opt-in: STRATA_IQ_GATHER=1
+-const bool gather = std::getenv("STRATA_IQ_GATHER") != nullptr;
++// Read once, lazily, from inside a kernel: this TU is compiled with -mavx512..., so a namespace-scope initializer
++// would run as a pre-main constructor (before any feature guard) and be emitted with AVX-512 instructions that
++// fault on a CPU without them.  A function-local static initializes on first call, which is already behind the
++// cpu_avx512_ok() dispatch guard.
++inline bool iq_gather() { static const bool v = std::getenv("STRATA_IQ_GATHER") != nullptr; return v; }
+ // E-2: software prefetch distance in bytes (STRATA_IQ_PREFETCH; 0 = off): -2-3% gate/up time on IQ3_S decode
+ // (the rows are read at ~30 GB/s by 6 cores, near what DDR5 with 4 KB pages gives: the pool is memory-bound)
+-const int prefetch_ahead = [] {
+-    const char* v = std::getenv("STRATA_IQ_PREFETCH");
+-    return v ? std::atoi(v) : 2048;
+-}();
++inline int iq_prefetch_ahead() {
++    static const int v = [] { const char* s = std::getenv("STRATA_IQ_PREFETCH"); return s ? std::atoi(s) : 2048; }();
++    return v;
++}
+ 
+ // lanes 0-7 -> s0, 8-15 -> s1, 16-23 -> s2, 24-31 -> s3 (int16 lanes of a maddubs result: two values each)
+ inline __m512i scales4(int s0, int s1, int s2, int s3) {
+@@ -111,7 +115,7 @@ template <> struct Fmt<18> {   // IQ3_XXS: d, qs[64] grid bytes, 8 x u32 (4 x 7-
+     static inline void decode(const uint8_t* b, int j, __m512i& g, __mmask64& m, __m512i& sc) {
+         const uint8_t* q = b + 2 + 16 * j;
+         // E-2: one gather of the 16 grid words (the scalar lookups assembled with set_epi32 cost ~30 uops)
+-        g = gather ? _mm512_i32gather_epi32(_mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i*) q)), iq3xxs_grid, 4)
++        g = iq_gather() ? _mm512_i32gather_epi32(_mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i*) q)), iq3xxs_grid, 4)
+                    : _mm512_set_epi32((int) iq3xxs_grid[q[15]], (int) iq3xxs_grid[q[14]], (int) iq3xxs_grid[q[13]], (int) iq3xxs_grid[q[12]],
+                              (int) iq3xxs_grid[q[11]], (int) iq3xxs_grid[q[10]], (int) iq3xxs_grid[q[9]], (int) iq3xxs_grid[q[8]],
+                              (int) iq3xxs_grid[q[7]], (int) iq3xxs_grid[q[6]], (int) iq3xxs_grid[q[5]], (int) iq3xxs_grid[q[4]],
+@@ -133,7 +137,7 @@ template <> struct Fmt<21> {   // IQ3_S: d, qs[64], qh[8], signs[32], scales[4]
+     static inline void decode(const uint8_t* b, int j, __m512i& g, __mmask64& m, __m512i& sc) {
+         const uint8_t* q = b + 2 + 16 * j;
+         const uint32_t h0 = b[66 + 2 * j], h1 = b[66 + 2 * j + 1];
+-        if (gather) {   // E-2: the 9-bit indices (the high bit from qh under a mask), one gather
++        if (iq_gather()) {   // E-2: the 9-bit indices (the high bit from qh under a mask), one gather
+             __m512i idx = _mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i*) q));
+             idx = _mm512_mask_add_epi32(idx, (__mmask16) (h0 | (h1 << 8)), idx, _mm512_set1_epi32(256));
+             g = _mm512_i32gather_epi32(idx, iq3s_grid, 4);
+@@ -157,6 +161,7 @@ inline void row_dot(const uint8_t* row, int nblocks, const block_q8_K* const* y,
+     __m512 accf[NT];
+     for (int t = 0; t < NT; ++t) accf[t] = _mm512_setzero_ps();
+     const __m512i zero = _mm512_setzero_si512();
++    const int prefetch_ahead = iq_prefetch_ahead();
+     for (int i = 0; i < nblocks; ++i) {
+         const uint8_t* blk = row + (size_t) i * Fmt<TY>::bytes;
+         // E-2: the weight rows stream from DRAM (4 KB pages when large pages are refused): ask for the bytes a few
+diff --git a/src/kernels/cpu/native_expert.cpp b/src/kernels/cpu/native_expert.cpp
+index 2e8d8ad..23bd7ee 100644
+--- a/src/kernels/cpu/native_expert.cpp
++++ b/src/kernels/cpu/native_expert.cpp
+@@ -82,28 +82,30 @@ void native_gu_rows(const NativeFmt& f, const uint8_t* blob, const void* const*
+     // at one (all are bound by the codebook lookups, ~5 GB/s per core), measured by native_expert_parity.  AVX-512
+     // first, then the AVX-2 one (Zen 2/3, Intel 12th-14th gen).  STRATA_NO_IQ512 drops an AVX-512 CPU to the
+     // AVX-2 kernel, STRATA_NO_IQ256 drops the AVX-2 kernel; ggml-cpu's single-token vec_dot is reached only with
+-    // both set (and on a CPU without AVX-512, STRATA_NO_IQ512 changes nothing).
++    // both set (on a CPU without AVX-512, STRATA_NO_IQ512 changes nothing, and on a CPU without AVX2 the vec_dot
++    // is used for every row - the AVX-2 and AVX-512 kernels never run).
+     static const bool avx512 = cpu_avx512_ok() && std::getenv("STRATA_NO_IQ512") == nullptr;
+-    static const bool avx2 = std::getenv("STRATA_NO_IQ256") == nullptr;
++    static const bool avx2 = cpu_avx2_ok() && std::getenv("STRATA_NO_IQ256") == nullptr;
+     // #152: from how many tokens the multi-token kernels run (ggml's vec_dot below that).  The default 2 is the
+     // measured-fastest rule, but a token's expert rows then round differently alone than in a group, so greedy output
+     // can depend on how many drafts a verify window held.  STRATA_IQ_MT_MIN=1 (opt-in, 0.1.30) uses the multi-token
+     // kernels for every group: output independent of the drafting, at a measured -1..-3% decode on IQ3_S (AVX-512).
+     static const int mt_min = [] { const char* e = std::getenv("STRATA_IQ_MT_MIN"); return e ? std::atoi(e) : 2; }();
+     // Unsloth UD-Q4_K_XL's Q4_K gate/up: the multi-token kernel is bit-exact against ggml's per-token dot (any group
+-    // size, no #152 rule).  Opt-in, STRATA_KQ256=1: measured no faster in the engine (a window's expert groups hold
+-    // ~1.4 tokens and the weights stay in L1 across ggml's per-token calls; 1.01-1.13x in native_expert_parity).
+-    static const bool kq = [] { const char* v = std::getenv("STRATA_KQ256"); return v != nullptr && std::atoi(v) != 0; }();
++    // size, no #152 rule).  Opt-in, STRATA_KQ256=1 (needs AVX2): measured no faster in the engine (a window's expert
++    // groups hold ~1.4 tokens and the weights stay in L1 across ggml's per-token calls; 1.01-1.13x in
++    // native_expert_parity).
++    static const bool kq = cpu_avx2_ok() && [] { const char* v = std::getenv("STRATA_KQ256"); return v != nullptr && std::atoi(v) != 0; }();
+     if (kq && f.gu_type == 12 && nt >= 2) {   // one token: ggml's own dot below (the same bits, less overhead)
+         kq256_gu_rows(f.gu_type, blob, f.gu_row, f.up_off, (int) f.n_embd, act, nt, ff, r0, r1);
+         return;
+     }
+-    if (nt >= mt_min && iq512_supported(f.gu_type)) {
+-        if (avx512) {
++    if (nt >= mt_min) {
++        if (avx512 && iq512_supported(f.gu_type)) {
+             iq512_gu_rows(f.gu_type, blob, f.gu_row, f.up_off, (int) f.n_embd, act, nt, ff, r0, r1);
+             return;
+         }
+-        if (avx2) {
++        if (avx2 && iq256_supported(f.gu_type)) {
+             iq256_gu_rows(f.gu_type, blob, f.gu_row, f.up_off, (int) f.n_embd, act, nt, ff, r0, r1);
+             return;
+         }
+@@ -125,10 +127,11 @@ void native_gu_rows(const NativeFmt& f, const uint8_t* blob, const void* const*
+ void native_down_rows(const NativeFmt& f, const uint8_t* blob, const void* const* hq, int nt, float* const* out,
+                       int r0, int r1) {
+     // IQ4_NL down rows: the AVX-2 multi-token kernel decodes the nibbles and absolutises the weights once per
+-    // block instead of once per token; ggml-cpu's dot is single-token.  STRATA_NO_IQ4NL falls back to it.
+-    static const bool iq4nl_mt = std::getenv("STRATA_NO_IQ4NL") == nullptr;
++    // block instead of once per token; ggml-cpu's dot is single-token.  STRATA_NO_IQ4NL falls back to it (as does
++    // any CPU without AVX2).
++    static const bool iq4nl_mt = cpu_avx2_ok() && std::getenv("STRATA_NO_IQ4NL") == nullptr;
+     static const int mt_min = [] { const char* e = std::getenv("STRATA_IQ_MT_MIN"); return e ? std::atoi(e) : 2; }();
+-    static const bool kq = [] { const char* v = std::getenv("STRATA_KQ256"); return v != nullptr && std::atoi(v) != 0; }();
++    static const bool kq = cpu_avx2_ok() && [] { const char* v = std::getenv("STRATA_KQ256"); return v != nullptr && std::atoi(v) != 0; }();
+     if (kq && nt >= 2 && (f.d_type == 7 || f.d_type == 8)) {   // Q5_1 / Q8_0 down: bit-exact, any group size
+         kq256_rows(f.d_type, blob + f.down_off, f.d_row, (int) f.n_ff, hq, nt, out, r0, r1);
+         return;
+diff --git a/src/kernels/cpu/pool.cpp b/src/kernels/cpu/pool.cpp
+index 45e4347..2fc28b5 100644
+--- a/src/kernels/cpu/pool.cpp
++++ b/src/kernels/cpu/pool.cpp
+@@ -615,7 +615,7 @@ void ExpertPool::run_split(ExpertJob* jobs, int n) {
+     parts_a_ = (std::max)(1, (3 * threads + n - 1) / n);
+     parts_b_ = parts_a_;
+     run_phase(1, n * parts_a_);
+-    for (int e = 0; e < n; ++e) act_quant_q8_1(split_[(size_t) e].ff, FF, split_[(size_t) e].a2);
++    for (int e = 0; e < n; ++e) act_quant_any(split_[(size_t) e].ff, FF, split_[(size_t) e].a2);
+     run_phase(2, n * parts_b_);
+     mode_ = 0;
+     ms_drain_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+@@ -647,7 +647,7 @@ void ExpertPool::run_split_multi(ExpertJobMulti* jobs, int n) {
+     const auto t1 = std::chrono::steady_clock::now();
+     for (int e = 0; e < n; ++e)
+         for (int t = 0; t < jobs[e].nt; ++t)
+-            act_quant_q8_1(split_multi_[(size_t) e].ff[t], FF, split_multi_[(size_t) e].a2[t]);
++            act_quant_any(split_multi_[(size_t) e].ff[t], FF, split_multi_[(size_t) e].a2[t]);
+     const auto t2 = std::chrono::steady_clock::now();
+     mrows_ = (int64_t) n * H;
+     run_phase(4, mtasks_);
+diff --git a/src/program/generate.cpp b/src/program/generate.cpp
+index f2df1d4..0bcf5fa 100644
+--- a/src/program/generate.cpp
++++ b/src/program/generate.cpp
+@@ -1713,19 +1713,12 @@ int main(int argc, char** argv) {
+         return 2;
+     }
+ 
+-    // **BEFORE ANYTHING ELSE.**  The CPU expert kernel is AVX-512 (VNNI + VBMI) and its translation unit is
+-    // compiled `/arch:AVX512`, so on a CPU without those features it does not fail - it executes an illegal
+-    // instruction at some unpredictable token.  Refusing at second zero is the whole point of P2.S3's check.
++    // The oracle switch decides which CPU expert kernels the canonical Q2_0 pack runs - AVX-512 VNNI here or a
++    // plain Q8_0 oracle there - so it must be set before any worker thread reads it.  It does nothing for a native
++    // (GGUF-quant) pack, which never enters those kernels.  Whether THIS CPU can run the experts at all is settled
++    // further below, once the pack kind is known: the canonical pack needs AVX-512 and refuses without it, a native
++    // pack falls back to ggml-cpu's portable kernels on a CPU without AVX2.
+     strata::kernels::cpu::expert_set_oracle_q8_0(o.cpu_oracle_q8_0);
+-    // ... and nothing runs on a CPU without AVX2: every CPU expert kernel is AVX2 at least (the AVX-512 ones are
+-    // chosen above it), and so is ggml-cpu in the release build, which the native pack's layout load initializes
+-    // next.  Refused here, by name, rather than an illegal instruction in the first expert.
+-    if (!strata::kernels::cpu::cpu_avx2_ok()) {
+-        std::fprintf(stderr, "strata generate: this CPU (%s) does not support AVX2 with FMA and F16C, which every CPU "
+-                             "expert kernel needs; Strata runs on Intel Haswell (2013), AMD Zen (2017) or newer\n",
+-                     strata::kernels::cpu::cpu_name().c_str());
+-        return 2;
+-    }
+ 
+     std::string err;
+     if (!o.native_head_gguf.empty() && !o.stream_token) {
+@@ -1793,8 +1786,16 @@ int main(int argc, char** argv) {
+             std::fprintf(stderr, "strata generate: PCIe probe failed -> pcie_frac default %.2f\n", base);
+         }
+     }
+-    // the canonical Q2_0 pack's CPU kernels are AVX-512 only; a native pack runs on AVX2 CPUs as well
++    // Which expert kernels run depends on the pack AND this CPU together.  The canonical Q2_0 pack's CPU kernels
++    // are AVX-512 only, so without AVX-512 it refuses here, cleanly, rather than faulting mid-run.  A native
++    // (GGUF-quant) pack has a portable ggml-cpu fallback: without AVX2 it drops to that and warns that decoding
++    // is several-fold slower; with AVX2 but no AVX-512 it runs the AVX2 kernels; with AVX-512 it uses those.
+     if (!native_pack) strata::kernels::cpu::cpu_require_expert_support();
++    else if (!strata::kernels::cpu::cpu_avx2_ok())
++        std::fprintf(stderr, "strata generate: this CPU (%s) has no AVX2: the experts run on the portable ggml-cpu "
++                             "kernels, so the output is correct but decoding is several-fold slower than on an "
++                             "AVX2 machine\n",
++                     strata::kernels::cpu::cpu_name().c_str());
+     else if (!strata::kernels::cpu::cpu_avx512_ok())
+         std::fprintf(stderr, "strata generate: this CPU has no AVX-512: the expert kernels run on %s "
+                              "(multi-token for the i-quant gate/up rows)\n",
